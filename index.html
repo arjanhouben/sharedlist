@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+	<script src="paho-mqtt.js" type="text/javascript"></script>
+	<meta name="viewport" content="width=device-width, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
+	<link href="style.css" rel="stylesheet" type="text/css" />
+	<script>
+		const list_names = [ "actief", "doorgestreept" ]
+		const ALL = ( query, context ) => (context || document).querySelectorAll(query)
+		const ONE = ( query, context ) => (context || document).querySelector(query)
+		const each = ( query, call ) => ALL( query ).forEach( call )
+		const set_value = ( item, value ) => { const last = item.value; item.value = value; return last; }
+		const appendText = ( item, text ) => { item.appendChild( document.createTextNode( text ) ); return item }
+		const element = name => document.createElement( name )
+		const includes = ( arr, item ) => Array.prototype.includes.call( arr, item )
+		const matchesSelector = ( obj, selector ) => includes( ALL(selector), obj )
+		const insertChildInFront = ( obj, item ) => obj.insertBefore( item, obj.firstChild )
+		const parse_non_empty_string = str => str.length ? JSON.parse( str ) : null
+		const now = () => new Date().getTime()
+		const swap = ( a, b ) => { let tmp = a; a = b; b = tmp; }
+		const formatModificationTime = ms => {
+			const s = ms / 1000
+			if ( s < 10 ) return "10 s"
+			if ( s < 30 ) return "30 s"
+			if ( s < 600 ) return parseInt( s / 60 ) + " m"
+			if ( s < 3600 ) return parseInt( s / 600 ) + "0 m"
+			if ( s < 3600*24 ) return parseInt( s / 3600 ) + " u"
+			return parseInt( s / 3600 / 24 ) + " d"
+		}
+		const update_modification_time = () =>
+		{
+			ALL(".modification_time").forEach(
+				el => {
+					const m = get_parent_item( el ).getAttribute( "modification" )
+					el.innerHTML = formatModificationTime( now() - m )
+				}
+			)
+		}
+		const add_item_to_datalist = name => {
+			if ( !ONE("option[name=\"" + name + "\"") )
+			{
+				const option = element( "option" )
+				option.setAttribute( "name", name )
+				ONE("datalist").appendChild( appendText( option, name ) )
+			}
+		}
+		const remove_item_from_list = el =>
+		{
+			el.classList.add( "remove_animation" )
+			if ( !el.getAttribute( "timer" ) )
+			{
+				el.setAttribute(
+					"timer",
+					setTimeout( () => el.remove(), 1000 )
+				)
+			}
+		}
+		const query = {};
+		window.location.search.split( /[&?]/ ).map( str => str.split( '=' ) ).forEach(
+			a => query[ a[0] ] = a[1]
+		)
+		if ( query.reset )
+		{
+			window.localStorage.clear()
+			window.location.href = window.location.href.replace( /reset=[^&]*/, "" )
+		}
+		const get_or_set_user = () =>
+		{
+			let user = window.localStorage.getItem( "user" )
+			while ( !user )
+			{
+				user = prompt( "wat is jouw naam?" )
+			}
+			window.localStorage.setItem( "user", user )
+			return user;
+		}
+		const load_items_from_cache = () => {
+			for ( k of Object.keys( window.localStorage ) )
+			{
+				for ( i of list_names )
+				{
+					if ( k.startsWith( i + "/" ) )
+					{
+						const data = window.localStorage.getItem( k )
+						send_message( i, k.substring( i.length + 1 ), parse_non_empty_string( data ) )
+					}
+				}
+			}
+		}
+		const mqtt = new Paho.Client( window.location.host, 9999, "", "" );
+		let mqtt_send_proxy = null
+		const local_send = e => {
+			e.local = true
+			mqtt.onMessageArrived( e )
+		}
+		const options = {
+			timeout: 1,
+			onSuccess: m => {
+				mqtt_send_proxy = local_send
+				load_items_from_cache()
+				mqtt_send_proxy = e => {
+					try 
+					{
+						mqtt.send( e )
+					}
+					catch( err )
+					{
+						mqtt_send_proxy = local_send;
+						mqtt_send_proxy( e )
+					}
+				}
+				mqtt.subscribe( "actief/#" );
+				mqtt.subscribe( "doorgestreept/#" );
+			},
+			reconnect: true,
+			onFailure: e => {
+				mqtt_send_proxy = local_send
+				load_items_from_cache()
+			}
+		};
+		window.ononline = e => mqtt.connect( options ) 
+		window.onoffline = e => mqtt_send_proxy = local_send
+		mqtt.onConnectionLost = e => {
+			console.log( e )
+		}
+		mqtt.onMessageArrived = e => {
+			try
+			{
+				console.log( e.destinationName, e.payloadString )
+				window.localStorage.setItem( e.destinationName, e.payloadString )
+				const source = e.destinationName.split( '/' )
+				const id = "#" + source[ 0 ]
+				const name = source[ 1 ]
+				add_item_to_datalist( name )
+				let existing_id = ONE( id + ">li[name=\"" + name + "\"]" )
+				if ( e.payloadString.length > 0 )
+				{
+					const metadata = parse_non_empty_string( e.payloadString )
+					if ( !existing_id )
+					{
+						const li = element( "li" )
+						li.setAttribute( "type", "item" )
+						li.appendChild( appendText( element( "span" ), name ) )
+						const metadiv = li.appendChild( element( "div" ) )
+						metadiv.classList.add( "metadata" )
+						metadiv.appendChild( element( "span" ) ).classList.add( "username" )
+						metadiv.appendChild( element( "span" ) ).classList.add( "modification_time" )
+						li.onclick = e => {}
+						existing_id = li
+					}
+					else
+					{
+						existing_id.classList.remove( "remove_animation" )
+						clearTimeout( existing_id.getAttribute( "timer" ) )
+						existing_id.removeAttribute( "timer" )
+					}
+					let add = ( el, b ) => ONE( id ).insertBefore( el, b )
+					for ( el of ALL( id + ">li" ) )
+					{
+						if ( el.getAttribute( "modification" ) < metadata.modification )
+						{
+							add( existing_id, el )
+							add = () => {}
+							break;
+						}
+					}
+					add( existing_id )
+					if ( e.local )
+					{
+						existing_id.classList.add( "local_only" )
+					}
+					else
+					{
+						existing_id.classList.remove( "local_only" )
+					}
+					ONE( ".username", existing_id ).innerHTML = metadata.user
+					existing_id.setAttribute( "name", name )
+					existing_id.setAttribute( "modification", metadata.modification )
+					update_modification_time()
+				}
+				else if ( existing_id )
+				{
+					remove_item_from_list( existing_id )
+				}
+			}
+			catch( e )
+			{
+				console.log( e )
+			}
+		}
+		setTimeout( () => mqtt.connect(options), 1 );
+		const send_message = ( topic, name, data ) =>
+		{
+			let message = new Paho.Message( data !== null ? JSON.stringify( data ) : "" )
+			message.destinationName = topic + "/" + name
+			message.retained = true
+			message.local = true
+			mqtt_send_proxy( message )
+		}
+		const set_item = ( topic, name ) => {
+			const metadata = {
+				"user": user,
+				"modification": new Date().getTime()
+			}
+			send_message( topic, name, metadata )
+		}
+		const reset_item = ( topic, name ) => send_message( topic, name, null )
+
+		const user = get_or_set_user()
+		window.onload = e => 
+		{
+			ONE("form").onsubmit = e =>
+			{
+				const value = set_value( ONE( "input[type=text]", e.target ), "" )
+				reset_item( "doorgestreept", value )
+				set_item( "actief", value )
+				e.preventDefault();
+			}
+			const params = new URLSearchParams( window.location.search )
+			setInterval( update_modification_time, 10000 )
+		}
+		const get_parent_item = el => {
+			while ( el && el.getAttribute( "type" ) !== "item" )
+			{
+				el = el.parentElement
+			}
+			return el
+		}
+		window.onclick = e =>
+		{
+			let li = get_parent_item( e.target )
+			if ( !li ) return
+			const dt = now() - li.getAttribute( "mousedown", now() );
+			if ( dt > 300 )
+			{
+				e.stopPropagation()
+				return
+			}
+			let self = li.parentNode.id
+			let other = list_names.filter( str => str !== self )[ 0 ]
+			if ( li.classList.contains( "local_only" ) && mqtt_send_proxy !== local_send )
+			{
+				[ self, other ] = [ other, self ]
+			}
+			set_item( other, li.getAttribute( "name" ) )
+			reset_item( self, li.getAttribute( "name" ) )
+		}
+		window.onmousedown = e =>
+		{
+			let li = get_parent_item( e.target )
+			if ( !li ) return
+			if ( li.parentElement.id == "doorgestreept" )
+			{
+				li = ALL( "#doorgestreept>li" )
+			}
+			else
+			{
+				li = [ li ]
+			}
+			for ( const el of li )
+			{
+				el.classList.add( "remove_timer_active" )
+				el.setAttribute( 
+					"remove_timer", 
+					setTimeout(
+						() => {
+							console.log( "remove item", el.parentElement.id, el.getAttribute( "name" ) )
+							reset_item( el.parentElement.id, el.getAttribute( "name" ) )
+						},
+						1000
+					)
+				)
+				el.setAttribute( "mousedown", now() )
+			}
+			console.log( li )
+		}
+		window.onmouseup = e =>
+		{
+			for ( const el of ALL( ".remove_timer_active" ) )
+			{
+				el.classList.remove( "remove_timer_active" )
+				clearTimeout(
+					el.getAttribute( "remove_timer" )
+				)
+			}
+		}
+		window.ontouchstart = window.onmousedown
+		window.ontouchend = window.onmouseup
+	</script>
+	<body>
+		<form>
+			<input type="text" list="inputs" /><input type="submit" value="voeg toe" />
+			<datalist id="inputs"></datalist>
+		</form>
+		<div id="actief"></div>
+		<div id="doorgestreept"></div>
+	</body>
+</html>
