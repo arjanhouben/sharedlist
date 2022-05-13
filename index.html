@@ -92,13 +92,15 @@
 			mqtt.onMessageArrived( e )
 		}
 		const options = {
-			timeout: 1,
+			timeout: 30,
 			onSuccess: m => {
 				mqtt_send_proxy = local_send
 				load_items_from_cache()
 				mqtt_send_proxy = e => {
 					try 
 					{
+						local_send( e )
+						delete e.local
 						mqtt.send( e )
 					}
 					catch( err )
@@ -107,11 +109,12 @@
 						mqtt_send_proxy( e )
 					}
 				}
-				mqtt.subscribe( "actief/#" );
-				mqtt.subscribe( "doorgestreept/#" );
+				// mqtt.subscribe( "actief/#" );
+				mqtt.subscribe( path + "/#" );
 			},
 			reconnect: true,
 			onFailure: e => {
+				console.log( e )
 				mqtt_send_proxy = local_send
 				load_items_from_cache()
 			}
@@ -124,13 +127,12 @@
 		mqtt.onMessageArrived = e => {
 			try
 			{
-				console.log( e.destinationName, e.payloadString )
+				console.log( e.destinationName, e.payloadString, e.local )
 				window.localStorage.setItem( e.destinationName, e.payloadString )
 				const source = e.destinationName.split( '/' )
-				const id = "#" + source[ 0 ]
-				const name = source[ 1 ]
+				const name = source[ source.length - 1 ]
 				add_item_to_datalist( name )
-				let existing_id = ONE( id + ">li[name=\"" + name + "\"]" )
+				let existing_id = ONE( "li[name=\"" + name + "\"]" )
 				if ( e.payloadString.length > 0 )
 				{
 					const metadata = parse_non_empty_string( e.payloadString )
@@ -152,8 +154,11 @@
 						clearTimeout( existing_id.getAttribute( "timer" ) )
 						existing_id.removeAttribute( "timer" )
 					}
-					let add = ( el, b ) => ONE( id ).insertBefore( el, b )
-					for ( el of ALL( id + ">li" ) )
+					let add = ( el, b ) => {
+						if ( el.nextElementSibling === b ) return
+						ONE( "#actief" ).insertBefore( el, b )
+					}
+					for ( el of ALL( "li" ) )
 					{
 						if ( el.getAttribute( "modification" ) < metadata.modification )
 						{
@@ -175,6 +180,14 @@
 					existing_id.setAttribute( "name", name )
 					existing_id.setAttribute( "modification", metadata.modification )
 					update_modification_time()
+					if ( metadata.active )
+					{
+						existing_id.classList.remove( "doorgestreept" )
+					}
+					else
+					{
+						existing_id.classList.add( "doorgestreept" )
+					}
 				}
 				else if ( existing_id )
 				{
@@ -187,31 +200,31 @@
 			}
 		}
 		setTimeout( () => mqtt.connect(options), 1 );
-		const send_message = ( topic, name, data ) =>
+		const send_message = ( name, data ) =>
 		{
 			let message = new Paho.Message( data !== null ? JSON.stringify( data ) : "" )
-			message.destinationName = topic + "/" + name
+			message.destinationName = path + "/" + name
 			message.retained = true
-			message.local = true
 			mqtt_send_proxy( message )
 		}
-		const set_item = ( topic, name ) => {
+		const set_item = ( name, active ) => {
 			const metadata = {
 				"user": user,
-				"modification": new Date().getTime()
+				"modification": new Date().getTime(),
+				"active": Boolean( active )
 			}
-			send_message( topic, name, metadata )
+			send_message( name, metadata )
 		}
-		const reset_item = ( topic, name ) => send_message( topic, name, null )
 
 		const user = get_or_set_user()
+		const path = window.location.pathname.replace( /\/{2,}/g, "/" ).replace( /^\/|\/$/g, "" );
+		console.log(  window.location.pathname, path)
 		window.onload = e => 
 		{
 			ONE("form").onsubmit = e =>
 			{
 				const value = set_value( ONE( "input[type=text]", e.target ), "" )
-				reset_item( "doorgestreept", value )
-				set_item( "actief", value )
+				set_item( value, true )
 				e.preventDefault();
 			}
 			const params = new URLSearchParams( window.location.search )
@@ -234,14 +247,8 @@
 				e.stopPropagation()
 				return
 			}
-			let self = li.parentNode.id
-			let other = list_names.filter( str => str !== self )[ 0 ]
-			if ( li.classList.contains( "local_only" ) && mqtt_send_proxy !== local_send )
-			{
-				[ self, other ] = [ other, self ]
-			}
-			set_item( other, li.getAttribute( "name" ) )
-			reset_item( self, li.getAttribute( "name" ) )
+			const should_be_active = li.classList.contains( "doorgestreept" ) ? true : false
+			set_item( li.getAttribute( "name" ), should_be_active )
 		}
 		window.onmousedown = e =>
 		{
@@ -263,7 +270,7 @@
 					setTimeout(
 						() => {
 							console.log( "remove item", el.parentElement.id, el.getAttribute( "name" ) )
-							reset_item( el.parentElement.id, el.getAttribute( "name" ) )
+							set_item( el.getAttribute( "name" ) )
 						},
 						1000
 					)
@@ -291,6 +298,6 @@
 			<datalist id="inputs"></datalist>
 		</form>
 		<div id="actief"></div>
-		<div id="doorgestreept"></div>
+		<!-- <div id="doorgestreept"></div> -->
 	</body>
 </html>
