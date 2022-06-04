@@ -127,7 +127,6 @@
 		mqtt.onMessageArrived = e => {
 			try
 			{
-				console.log( e.destinationName, e.payloadString, e.local )
 				window.localStorage.setItem( e.destinationName, e.payloadString )
 				const source = e.destinationName.split( '/' )
 				const name = source[ source.length - 1 ]
@@ -221,11 +220,18 @@
 		console.log(  window.location.pathname, path)
 		window.onload = e => 
 		{
-			ONE("form").onsubmit = e =>
+			const input = ONE( "input[type=text]" )
+			const submit = ONE( "input[type=submit]" )
+			const form = ONE("form")
+			form.onsubmit = e =>
 			{
-				const value = set_value( ONE( "input[type=text]", e.target ), "" )
+				const value = set_value( input, "" )
 				set_item( value, true )
 				e.preventDefault();
+			}
+			form.onkeydown = e =>
+			{
+				if ( e.keyCode === 13 ) form.onsubmit( e )
 			}
 			const params = new URLSearchParams( window.location.search )
 			setInterval( update_modification_time, 10000 )
@@ -293,7 +299,7 @@
 		window.ontouchend = window.onmouseup
 	</script>
 	<body>
-		<form>
+		<form action="">
 			<input type="text" list="inputs" /><input type="submit" value="voeg toe" />
 			<datalist id="inputs"></datalist>
 		</form>
