@@ -85,7 +85,7 @@
 				}
 			}
 		}
-		const mqtt = new Paho.Client( window.location.host, 9999, "", "" );
+		const mqtt = new Paho.Client( "wss://" + window.location.host + ":9999/", "boodschappen" )
 		let mqtt_send_proxy = null
 		const local_send = e => {
 			e.local = true
